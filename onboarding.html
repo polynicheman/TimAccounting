@@ -143,10 +143,18 @@ button,input,select,textarea{font:inherit;color:inherit;}
   box-shadow:0 0 0 4px var(--brand-soft);}
 .step-item.done .step-dot{background:var(--good-soft);color:var(--good);
   border-color:rgba(47,191,135,.4);}
-.step-text{min-width:0;padding-top:1px;}
-.step-text .lbl{font-size:13.5px;font-weight:600;color:var(--text-muted);transition:.2s;}
+.step-text{min-width:0;padding-top:1px;flex:1;}
+.step-text .lbl{font-size:13.5px;font-weight:600;color:var(--text-muted);
+  transition:.2s;display:flex;align-items:center;gap:7px;}
 .step-item.active .step-text .lbl{color:var(--text);}
 .step-text .sub{font-size:11.5px;color:var(--text-faint);margin-top:1px;}
+
+/* "Optional" badge in the stepper */
+.opt-badge{display:inline-flex;align-items:center;
+  font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  padding:2px 6px;border-radius:4px;
+  background:var(--surface-3);color:var(--text-faint);flex-shrink:0;}
+.step-item.active .opt-badge{background:var(--brand-soft);color:var(--brand-2);}
 
 /* ── Panel ───────────────────────────────────────────────────── */
 .panel{background:var(--surface);border:1px solid var(--border);
@@ -159,6 +167,9 @@ button,input,select,textarea{font:inherit;color:inherit;}
   color:var(--brand-2);background:var(--brand-soft);
   border:1px solid rgba(79,124,255,.26);padding:5px 11px;border-radius:999px;
   margin-bottom:14px;}
+.panel-head .eyebrow .opt-tag{font-size:9.5px;padding:1px 6px;
+  background:rgba(79,124,255,.18);border-radius:4px;
+  color:var(--brand-2);letter-spacing:.06em;}
 .panel-head h1{font-size:clamp(22px,3vw,29px);margin:0 0 8px;
   letter-spacing:-.025em;}
 .panel-head p{margin:0;color:var(--text-muted);font-size:14.5px;max-width:620px;}
@@ -315,6 +326,14 @@ button,input,select,textarea{font:inherit;color:inherit;}
   display:grid;place-items:center;transition:.16s;}
 .invite-row .rm:hover{background:var(--bad-soft);color:var(--bad);}
 
+/* Empty-invite encouragement card */
+.invite-empty{padding:22px 20px;border:1px dashed var(--border-soft);
+  border-radius:var(--radius);text-align:center;background:var(--surface-2);}
+.invite-empty svg{width:28px;height:28px;color:var(--text-faint);
+  opacity:.5;margin:0 auto 10px;}
+.invite-empty p{font-size:12.5px;color:var(--text-faint);margin:0;line-height:1.55;}
+.invite-empty p strong{color:var(--text-muted);}
+
 /* ── Alert ───────────────────────────────────────────────────── */
 .alert{display:none;align-items:flex-start;gap:9px;padding:12px 14px;
   border-radius:10px;font-size:13px;margin-bottom:18px;line-height:1.45;}
@@ -370,6 +389,7 @@ button,input,select,textarea{font:inherit;color:inherit;}
   .step-item .step-text .sub{display:none;}
   .step-item .step-text .lbl{font-size:12.5px;white-space:nowrap;}
   .step-dot{width:20px;height:20px;font-size:10px;}
+  .opt-badge{display:none;}
   .topbar-progress{display:none;}
 }
 @media (max-width:640px){
@@ -395,7 +415,7 @@ button,input,select,textarea{font:inherit;color:inherit;}
 
 <body>
 
-<!-- ── Page state (loading / config error) ─────────────────────── -->
+<!-- ── Page state ─────────────────────────────────────────────── -->
 <div class="page-state" id="pageState">
   <div class="page-state-card">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -408,7 +428,7 @@ button,input,select,textarea{font:inherit;color:inherit;}
   </div>
 </div>
 
-<!-- ── App ──────────────────────────────────────────────────────── -->
+<!-- ── App ────────────────────────────────────────────────────── -->
 <div id="appRoot" style="display:none;flex-direction:column;min-height:100vh;">
 
   <header class="topbar">
@@ -460,7 +480,7 @@ button,input,select,textarea{font:inherit;color:inherit;}
         <button class="btn btn-ghost btn-lg" id="btnBack" type="button">Back</button>
         <span class="hint" id="footHint"></span>
         <div class="spacer"></div>
-        <button class="btn btn-ghost" id="btnSkip" type="button">Skip</button>
+        <button class="btn btn-ghost" id="btnSkip" type="button">Skip this step</button>
         <button class="btn btn-primary btn-lg" id="btnNext" type="button">Continue</button>
       </div>
     </section>
@@ -475,15 +495,16 @@ button,input,select,textarea{font:inherit;color:inherit;}
 /* ═══════════════════════════════════════════════════════════════════════
    APEX · onboarding.html
    Six-step workspace setup wizard. Live Supabase only.
+   Steps 5 (Opening balances) and 6 (Invite team) are optional.
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* ──────────────────────────────────────────────────────────────────────
    1. CONFIG
    ────────────────────────────────────────────────────────────────────── */
 const APEX_CONFIG = {
-supabaseUrl: 'https://dvyobkzxejifxdbebdvr.supabase.co',
-supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2eW9ia3p4ZWppZnhkYmViZHZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzNDA2NDYsImV4cCI6MjEwNTkxNjY0Nn0.OQfwArh-LnhosEV_tA5udXdN0qor6RfaCGn5RKWAUg0',
-version: '1.0.0'
+  supabaseUrl:     'https://dvyobkzxejifxdbebdvr.supabase.co',
+  supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2eW9ia3p4ZWppZnhkYmViZHZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzNDA2NDYsImV4cCI6MjEwNTkxNjY0Nn0.OQfwArh-LnhosEV_tA5udXdN0qor6RfaCGn5RKWAUg0',
+  version:         '1.0.1'
 };
 
 const IS_CONFIGURED =
@@ -640,8 +661,6 @@ const COUNTRIES = [
   'United Kingdom','United States','Other'
 ];
 
-/** Chart of accounts templates. First 9 system accounts are already
- *  created by the bootstrap trigger — these add the industry extras. */
 const COA_TEMPLATES = {
   service: {
     name: 'Service business',
@@ -776,6 +795,11 @@ const State = {
 
 /* ──────────────────────────────────────────────────────────────────────
    6. STEPS DEFINITION
+   ──────────────────────────────────────────────────────────────────────
+   Each step may carry `optional: true`. When set:
+     • An "Optional" badge appears in the sidebar stepper
+     • The "Skip this step" button is shown in the panel footer
+     • The wizard never blocks progress on this step
    ────────────────────────────────────────────────────────────────────── */
 const STEPS = [
   /* ── 1. Business type ─────────────────────────────────────── */
@@ -1031,16 +1055,15 @@ const STEPS = [
     }
   },
 
-  /* ── 5. Opening balances ─────────────────────────────────── */
+  /* ── 5. Opening balances — OPTIONAL ─────────────────────── */
   {
+    optional: true,
     label: 'Opening balances',
     sub: 'Where you stand today',
     title: 'Enter your opening balances',
     subtitle: 'Starting fresh? Skip this. Migrating? Enter what you own and owe today — Apex will post the balancing entry itself.',
     render() {
       const tpl = COA_TEMPLATES[State.form.coa_template] || COA_TEMPLATES.service;
-      // Build the list of accounts that can take an opening balance:
-      // the 9 system accounts + template accounts of type Asset/Liability/Equity
       const systemAccounts = [
         { number:'1000', name:'Cash', type:'Asset', subtype:'Current Asset' },
         { number:'1010', name:'Accounts Receivable', type:'Asset', subtype:'Current Asset' },
@@ -1049,7 +1072,6 @@ const STEPS = [
       ];
       const tplAccounts = tpl.accounts.filter((a) =>
         a.type === 'Asset' || a.type === 'Liability' || a.type === 'Equity');
-      // De-dup by account number (template may re-list 1010)
       const seen = new Set();
       const relevant = [];
       [...systemAccounts, ...tplAccounts].forEach((a) => {
@@ -1152,12 +1174,13 @@ const STEPS = [
     validate() { return ''; }
   },
 
-  /* ── 6. Team invites ─────────────────────────────────────── */
+  /* ── 6. Team invites — OPTIONAL ─────────────────────────── */
   {
+    optional: true,
     label: 'Invite team',
     sub: 'Who else needs access',
     title: 'Invite your team',
-    subtitle: 'Optional. You can add people at any time from Settings → Team. Roles control exactly what each person can see and do.',
+    subtitle: 'Completely optional. You can add people at any time from Settings → Team. Roles control exactly what each person can see and do.',
     render() {
       return '' +
         '<div class="row-2">' +
@@ -1179,12 +1202,28 @@ const STEPS = [
         '</div>' +
         '<button class="btn btn-soft btn-sm" id="btnAddInvite" type="button" ' +
                 'style="margin-top:-4px">+ Add invitation</button>' +
-        '<div class="invite-list" id="inviteList"></div>';
+        '<div class="invite-list" id="inviteList"></div>' +
+        '<div class="invite-empty" id="inviteEmpty">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+          'stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>' +
+          '<circle cx="9" cy="7" r="4"/>' +
+          '<path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>' +
+          '<p><strong>No invitations yet.</strong> ' +
+          'Click <em>Create workspace</em> below to skip this step — ' +
+          'you can invite teammates whenever you like.</p>' +
+        '</div>';
     },
     mount() {
       const renderInvites = () => {
         const host = $('#inviteList');
-        if (!State.form.invites.length) { host.innerHTML = ''; return; }
+        const empty = $('#inviteEmpty');
+        if (!State.form.invites.length) {
+          host.innerHTML = '';
+          if (empty) empty.style.display = 'block';
+          return;
+        }
+        if (empty) empty.style.display = 'none';
         host.innerHTML = State.form.invites.map((inv, i) =>
           '<div class="invite-row">' +
             '<span class="avatar">' + escapeHtml(initials(inv.email)) + '</span>' +
@@ -1221,6 +1260,7 @@ const STEPS = [
         emailEl.value = '';
         stepAlert('');
         renderInvites();
+        updateLastStepLabel();
         toast('Invitation queued for ' + email, 'ok', 2400);
       });
 
@@ -1233,6 +1273,7 @@ const STEPS = [
         if (!btn) return;
         State.form.invites.splice(Number(btn.dataset.i), 1);
         renderInvites();
+        updateLastStepLabel();
       });
 
       renderInvites();
@@ -1249,10 +1290,13 @@ function renderStepper() {
   host.innerHTML = '<h2>Your setup</h2>' + STEPS.map((s, i) => {
     const cls = i < State.step ? 'done' : i === State.step ? 'active' : '';
     const mark = i < State.step ? '✓' : String(i + 1);
+    const optBadge = s.optional
+      ? '<span class="opt-badge">Optional</span>'
+      : '';
     return '<div class="step-item ' + cls + '">' +
       '<span class="step-dot">' + mark + '</span>' +
       '<span class="step-text">' +
-        '<div class="lbl">' + escapeHtml(s.label) + '</div>' +
+        '<div class="lbl">' + escapeHtml(s.label) + optBadge + '</div>' +
         '<div class="sub">' + escapeHtml(s.sub) + '</div>' +
       '</span>' +
     '</div>';
@@ -1266,12 +1310,32 @@ function renderProgress() {
   $('#progressPct').textContent = pct + '%';
 }
 
+/** Update the primary button label on the last step depending on whether
+ *  the user has added any invites. If they have none, make it obvious
+ *  that clicking it will simply skip the invites and create the workspace. */
+function updateLastStepLabel() {
+  const next = $('#btnNext');
+  if (!next) return;
+  const isLast = State.step === STEPS.length - 1;
+  if (!isLast) return;
+  if (State.form.invites.length) {
+    next.textContent = 'Create workspace';
+  } else {
+    next.textContent = 'Skip & create workspace';
+  }
+}
+
 function renderStep() {
   const step = STEPS[State.step];
   if (!step) return;
 
   stepAlert('');
-  $('#stepEyebrow').textContent = 'Step ' + (State.step + 1) + ' of ' + STEPS.length;
+  const isLast = State.step === STEPS.length - 1;
+  const optTag = step.optional
+    ? ' <span class="opt-tag">Optional</span>'
+    : '';
+  $('#stepEyebrow').innerHTML =
+    'Step ' + (State.step + 1) + ' of ' + STEPS.length + optTag;
   $('#stepTitle').textContent = step.title;
   $('#stepSubtitle').textContent = step.subtitle;
   $('#stepContent').innerHTML = step.render();
@@ -1283,15 +1347,23 @@ function renderStep() {
   const skip = $('#btnSkip');
 
   back.disabled = State.step === 0;
-  skip.style.display = (State.step === 4) ? '' : 'none';
 
-  const isLast = State.step === STEPS.length - 1;
-  next.textContent = isLast ? 'Create workspace' : 'Continue';
+  // Show the Skip button on any optional step
+  skip.style.display = step.optional ? '' : 'none';
+
+  // Primary button label
+  if (isLast) {
+    next.textContent = State.form.invites.length
+      ? 'Create workspace'
+      : 'Skip & create workspace';
+  } else {
+    next.textContent = 'Continue';
+  }
   next.disabled = false;
 
   $('#footHint').textContent = isLast
     ? 'Your books are ready.'
-    : 'Takes about 30 seconds.';
+    : (step.optional ? 'You can skip this step.' : 'Takes about 30 seconds.');
 
   const panel = $('#panel');
   panel.style.animation = 'none';
@@ -1332,8 +1404,14 @@ $('#btnNext').addEventListener('click', goNext);
 $('#btnBack').addEventListener('click', goBack);
 
 $('#btnSkip').addEventListener('click', () => {
-  State.step = Math.min(State.step + 1, STEPS.length - 1);
-  renderStep();
+  // Skip button on an optional step: jump straight to the next step
+  // without validating or requiring anything.
+  if (State.step < STEPS.length - 1) {
+    State.step += 1;
+    renderStep();
+  } else {
+    finish();
+  }
 });
 
 $('#btnExit').addEventListener('click', async () => {
@@ -1354,13 +1432,12 @@ async function finish() {
   const baseCurrency = State.form.base_currency || 'USD';
 
   try {
-    // 1. Make sure we still have a session
+    // 1. Session
     const { data: { session } } = await sb.auth.getSession();
     if (!session) throw new Error('Your session expired. Please sign in again.');
     const userId = session.user.id;
 
-    // 2. Insert the tenant.
-    //    This fires bootstrap_tenant() which creates tenant_settings,
+    // 2. Insert the tenant. Bootstrap trigger creates settings,
     //    the 9 system accounts, and the Owner membership row.
     const tenantPayload = {
       owner_id: userId,
@@ -1383,8 +1460,7 @@ async function finish() {
 
     const tenantId = tenant.id;
 
-    // 3. Fetch the system accounts the trigger just created,
-    //    so we can look them up by number.
+    // 3. Fetch system accounts created by the trigger
     const { data: existingAccounts, error: exErr } = await sb
       .from('accounts')
       .select('id, account_number')
@@ -1396,10 +1472,10 @@ async function finish() {
       accountByNumber[a.account_number] = a.id;
     });
 
-    // 4. Insert template accounts (skip ones that already exist)
+    // 4. Insert template accounts (skip duplicates)
     const toInsert = [];
     for (const a of tpl.accounts) {
-      if (accountByNumber[a.number]) continue;   // already created by system
+      if (accountByNumber[a.number]) continue;
       toInsert.push({
         tenant_id: tenantId,
         account_number: a.number,
@@ -1421,14 +1497,12 @@ async function finish() {
       });
     }
 
-    // 5. Post opening balances as a single balanced journal entry.
+    // 5. Opening balances — only if the user entered any
     const openingEntries = Object.entries(State.form.opening_balances)
       .map(([num, val]) => ({ num, amount: Number(val) || 0 }))
       .filter((e) => e.amount > 0 && accountByNumber[e.num]);
 
     if (openingEntries.length) {
-      // Determine which accounts are Asset vs Liability/Equity so we know
-      // which side to post. System + template accounts combined.
       const typeByNumber = {};
       [
         { number:'1000', type:'Asset' }, { number:'1010', type:'Asset' },
@@ -1475,12 +1549,11 @@ async function finish() {
         }
       });
 
-      // Plug the difference into Opening Balance Equity (3900)
+      // Plug any imbalance into Opening Balance Equity (3900)
       const diff = totalDr - totalCr;
       if (Math.abs(diff) > 0.005) {
-        const obeId = accountByNumber['3900'];
+        let obeId = accountByNumber['3900'];
         if (!obeId) {
-          // If the system account is missing, create it now.
           const { data: newObe, error: obeErr } = await sb
             .from('accounts')
             .insert({
@@ -1495,12 +1568,13 @@ async function finish() {
             .select('id')
             .single();
           if (obeErr) throw obeErr;
-          accountByNumber['3900'] = newObe.id;
+          obeId = newObe.id;
+          accountByNumber['3900'] = obeId;
         }
 
         if (diff > 0) {
           lines.push({
-            account_id: accountByNumber['3900'],
+            account_id: obeId,
             debit_amount: 0,
             credit_amount: diff,
             currency: baseCurrency,
@@ -1512,7 +1586,7 @@ async function finish() {
           });
         } else {
           lines.push({
-            account_id: accountByNumber['3900'],
+            account_id: obeId,
             debit_amount: Math.abs(diff),
             credit_amount: 0,
             currency: baseCurrency,
@@ -1525,7 +1599,6 @@ async function finish() {
         }
       }
 
-      // Insert the journal entry header
       const { data: entry, error: entryErr } = await sb
         .from('journal_entries')
         .insert({
@@ -1546,7 +1619,6 @@ async function finish() {
         .single();
       if (entryErr) throw entryErr;
 
-      // Insert the lines
       if (lines.length) {
         const { error: lineErr } = await sb
           .from('journal_entry_lines')
@@ -1555,7 +1627,7 @@ async function finish() {
       }
     }
 
-    // 6. Queue team invitations
+    // 6. Invitations — only if any were queued
     if (State.form.invites.length) {
       const inviteRows = State.form.invites.map((inv) => ({
         tenant_id: tenantId,
@@ -1566,7 +1638,6 @@ async function finish() {
       }));
       const { error: invErr } = await sb.from('invitations').insert(inviteRows);
       if (invErr) {
-        // Non-fatal: onboarding is complete, we just couldn't queue invites.
         console.warn('Invitation queue failed:', invErr);
         toast('Workspace created — invitations could not be sent.', 'error', 5000);
       }
@@ -1582,9 +1653,19 @@ async function finish() {
   } catch (err) {
     console.error('Onboarding failed:', err);
     next.disabled = false;
-    next.textContent = 'Create workspace';
+    const isLast = State.step === STEPS.length - 1;
+    next.textContent = isLast
+      ? (State.form.invites.length ? 'Create workspace' : 'Skip & create workspace')
+      : 'Continue';
+
+    let friendly = err.message || 'unknown error';
+    if (friendly.includes('Session expired') || friendly.includes('Not authenticated')) {
+      friendly = 'Your session expired. Redirecting to sign in…';
+      setTimeout(() => { window.location.href = 'index.html'; }, 2200);
+    }
+
     stepAlert(
-      'We could not finish setting up: ' + (err.message || 'unknown error') +
+      'We could not finish setting up: ' + friendly +
       '. Nothing was lost — try again.'
     );
     toast('Setup failed. Please review and retry.', 'error', 5000);
@@ -1636,7 +1717,7 @@ function celebrate() {
   }
   State.session = session;
 
-  // 2. If the user already belongs to a tenant, skip onboarding entirely.
+  // 2. If already a member of a tenant, skip onboarding
   try {
     const { data: existing } = await sb
       .from('tenant_users')
@@ -1645,12 +1726,10 @@ function celebrate() {
       .eq('is_active', true)
       .limit(1);
     if (existing && existing.length) {
-      // Already onboarded — go straight to the dashboard.
       window.location.replace('dashboard.html');
       return;
     }
   } catch (err) {
-    // Non-fatal: if this check fails, we let them proceed.
     console.warn('Membership check failed:', err);
   }
 
@@ -1665,7 +1744,7 @@ function celebrate() {
     }
   } catch (e) {}
 
-  // 4. Load the currency list from the database
+  // 4. Load currencies from the database
   try {
     const { data: currencies } = await sb
       .from('currencies')
