@@ -496,6 +496,8 @@ button,input,select,textarea{font:inherit;color:inherit;}
    APEX · onboarding.html
    Six-step workspace setup wizard. Live Supabase only.
    Steps 5 (Opening balances) and 6 (Invite team) are optional.
+   Workspace creation goes through the onboard_workspace() RPC so RLS
+   cannot block the flow.
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -504,7 +506,7 @@ button,input,select,textarea{font:inherit;color:inherit;}
 const APEX_CONFIG = {
   supabaseUrl:     'https://dvyobkzxejifxdbebdvr.supabase.co',
   supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2eW9ia3p4ZWppZnhkYmViZHZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzNDA2NDYsImV4cCI6MjEwNTkxNjY0Nn0.OQfwArh-LnhosEV_tA5udXdN0qor6RfaCGn5RKWAUg0',
-  version:         '1.0.1'
+  version:         '1.0.2'
 };
 
 const IS_CONFIGURED =
@@ -1404,8 +1406,6 @@ $('#btnNext').addEventListener('click', goNext);
 $('#btnBack').addEventListener('click', goBack);
 
 $('#btnSkip').addEventListener('click', () => {
-  // Skip button on an optional step: jump straight to the next step
-  // without validating or requiring anything.
   if (State.step < STEPS.length - 1) {
     State.step += 1;
     renderStep();
@@ -1420,7 +1420,13 @@ $('#btnExit').addEventListener('click', async () => {
 });
 
 /* ──────────────────────────────────────────────────────────────────────
-   9. FINISH — PROVISION THE TENANT
+   9. FINISH — PROVISION THE TENANT VIA RPC
+   ──────────────────────────────────────────────────────────────────────
+   All tenant provisioning goes through the `onboard_workspace` RPC,
+   which is SECURITY DEFINER owned by postgres — so no RLS policy can
+   block the insert. Everything (tenant, system accounts, template
+   accounts, opening balances, invites) happens atomically inside the
+   function.
    ────────────────────────────────────────────────────────────────────── */
 async function finish() {
   const next = $('#btnNext');
@@ -1432,220 +1438,94 @@ async function finish() {
   const baseCurrency = State.form.base_currency || 'USD';
 
   try {
-    // 1. Session
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) throw new Error('Your session expired. Please sign in again.');
-    const userId = session.user.id;
+    // 1. Ensure session is live
+    const { data: { session }, error: sessErr } = await sb.auth.getSession();
+    if (sessErr) throw sessErr;
+    if (!session) {
+      throw new Error('Your session expired. Please sign in again.');
+    }
 
-    // 2. Insert the tenant. Bootstrap trigger creates settings,
-    //    the 9 system accounts, and the Owner membership row.
-    const tenantPayload = {
-      owner_id: userId,
-      name: State.form.name.trim(),
-      legal_name: State.form.legal_name.trim() || null,
-      tax_id: State.form.tax_id.trim() || null,
-      business_type: State.form.business_type,
-      country: State.form.country || null,
-      base_currency: baseCurrency,
-      fiscal_year_start: State.form.fiscal_year_start,
-      materiality_threshold: State.form.materiality_threshold
+    // 2. Refresh JWT so auth.uid() is guaranteed inside the RPC
+    try { await sb.auth.refreshSession(); } catch (e) { /* non-fatal */ }
+
+    // 3. Sanity-check the auth context (helps debugging in console)
+    try {
+      const { data: who } = await sb.rpc('whoami');
+      console.log('Auth context:', who);
+      if (!who || !who.has_jwt) {
+        throw new Error('Session invalid — please sign out and sign in again.');
+      }
+    } catch (whoErr) {
+      // If whoami isn't installed, don't block the flow — just log.
+      console.warn('whoami check skipped:', whoErr);
+    }
+
+    // 4. Build the payloads the RPC expects
+
+    // 4a. Template accounts
+    const templateAccounts = (tpl.accounts || []).map((a) => ({
+      number: a.number,
+      name: a.name,
+      type: a.type,
+      subtype: a.subtype || null
+    }));
+
+    // 4b. Opening balances — include the type so the RPC knows which side
+    const typeByNumber = {
+      '1000': 'Asset', '1010': 'Asset',
+      '2000': 'Liability', '3000': 'Equity'
     };
+    (tpl.accounts || []).forEach((a) => { typeByNumber[a.number] = a.type; });
 
-    const { data: tenant, error: tenantErr } = await sb
-      .from('tenants')
-      .insert(tenantPayload)
-      .select()
-      .single();
-    if (tenantErr) throw tenantErr;
-
-    const tenantId = tenant.id;
-
-    // 3. Fetch system accounts created by the trigger
-    const { data: existingAccounts, error: exErr } = await sb
-      .from('accounts')
-      .select('id, account_number')
-      .eq('tenant_id', tenantId);
-    if (exErr) throw exErr;
-
-    const accountByNumber = {};
-    (existingAccounts || []).forEach((a) => {
-      accountByNumber[a.account_number] = a.id;
+    const openingBalances = [];
+    Object.entries(State.form.opening_balances).forEach(([num, val]) => {
+      const amount = Number(val) || 0;
+      if (amount <= 0) return;
+      const type = typeByNumber[num];
+      if (!type) return;
+      openingBalances.push({
+        account_number: num,
+        amount: amount,
+        type: type
+      });
     });
 
-    // 4. Insert template accounts (skip duplicates)
-    const toInsert = [];
-    for (const a of tpl.accounts) {
-      if (accountByNumber[a.number]) continue;
-      toInsert.push({
-        tenant_id: tenantId,
-        account_number: a.number,
-        account_name: a.name,
-        account_type: a.type,
-        account_subtype: a.subtype,
-        is_active: true
-      });
+    // 4c. Invites
+    const invites = State.form.invites.map((inv) => ({
+      email: inv.email,
+      role: inv.role
+    }));
+
+    // 5. Single RPC call does everything
+    const { data, error } = await sb.rpc('onboard_workspace', {
+      p_business_type:         State.form.business_type || 'LLC',
+      p_name:                  State.form.name.trim(),
+      p_legal_name:            State.form.legal_name.trim() || null,
+      p_tax_id:                State.form.tax_id.trim() || null,
+      p_country:               State.form.country || null,
+      p_base_currency:         baseCurrency,
+      p_fiscal_year_start:     State.form.fiscal_year_start || '01-01',
+      p_materiality_threshold: State.form.materiality_threshold || 500,
+      p_accounts:              templateAccounts,
+      p_opening_balances:      openingBalances,
+      p_invites:               invites
+    });
+
+    if (error) throw error;
+    if (!data || !data.tenant_id) {
+      throw new Error('Server returned no tenant id.');
     }
 
-    if (toInsert.length) {
-      const { data: inserted, error: insErr } = await sb
-        .from('accounts')
-        .insert(toInsert)
-        .select('id, account_number');
-      if (insErr) throw insErr;
-      (inserted || []).forEach((a) => {
-        accountByNumber[a.account_number] = a.id;
-      });
-    }
+    console.log('Workspace created:', data);
 
-    // 5. Opening balances — only if the user entered any
-    const openingEntries = Object.entries(State.form.opening_balances)
-      .map(([num, val]) => ({ num, amount: Number(val) || 0 }))
-      .filter((e) => e.amount > 0 && accountByNumber[e.num]);
-
-    if (openingEntries.length) {
-      const typeByNumber = {};
-      [
-        { number:'1000', type:'Asset' }, { number:'1010', type:'Asset' },
-        { number:'2000', type:'Liability' }, { number:'3000', type:'Equity' },
-        ...tpl.accounts.map((a) => ({ number:a.number, type:a.type }))
-      ].forEach((r) => { typeByNumber[r.number] = r.type; });
-
-      let totalDr = 0;
-      let totalCr = 0;
-      const lines = [];
-
-      openingEntries.forEach((e, idx) => {
-        const acctType = typeByNumber[e.num];
-        if (!acctType) return;
-        const accountId = accountByNumber[e.num];
-        if (!accountId) return;
-
-        if (acctType === 'Asset') {
-          lines.push({
-            account_id: accountId,
-            debit_amount: e.amount,
-            credit_amount: 0,
-            currency: baseCurrency,
-            exchange_rate: 1,
-            base_debit: e.amount,
-            base_credit: 0,
-            line_description: 'Opening balance',
-            line_number: idx + 1
-          });
-          totalDr += e.amount;
-        } else {
-          lines.push({
-            account_id: accountId,
-            debit_amount: 0,
-            credit_amount: e.amount,
-            currency: baseCurrency,
-            exchange_rate: 1,
-            base_debit: 0,
-            base_credit: e.amount,
-            line_description: 'Opening balance',
-            line_number: idx + 1
-          });
-          totalCr += e.amount;
-        }
-      });
-
-      // Plug any imbalance into Opening Balance Equity (3900)
-      const diff = totalDr - totalCr;
-      if (Math.abs(diff) > 0.005) {
-        let obeId = accountByNumber['3900'];
-        if (!obeId) {
-          const { data: newObe, error: obeErr } = await sb
-            .from('accounts')
-            .insert({
-              tenant_id: tenantId,
-              account_number: '3900',
-              account_name: 'Opening Balance Equity',
-              account_type: 'Equity',
-              account_subtype: 'Retained Earnings',
-              is_system: true,
-              is_active: true
-            })
-            .select('id')
-            .single();
-          if (obeErr) throw obeErr;
-          obeId = newObe.id;
-          accountByNumber['3900'] = obeId;
-        }
-
-        if (diff > 0) {
-          lines.push({
-            account_id: obeId,
-            debit_amount: 0,
-            credit_amount: diff,
-            currency: baseCurrency,
-            exchange_rate: 1,
-            base_debit: 0,
-            base_credit: diff,
-            line_description: 'Opening Balance Equity',
-            line_number: lines.length + 1
-          });
-        } else {
-          lines.push({
-            account_id: obeId,
-            debit_amount: Math.abs(diff),
-            credit_amount: 0,
-            currency: baseCurrency,
-            exchange_rate: 1,
-            base_debit: Math.abs(diff),
-            base_credit: 0,
-            line_description: 'Opening Balance Equity',
-            line_number: lines.length + 1
-          });
-        }
-      }
-
-      const { data: entry, error: entryErr } = await sb
-        .from('journal_entries')
-        .insert({
-          tenant_id: tenantId,
-          entry_number: 'OB-00001',
-          entry_date: new Date().toISOString().slice(0, 10),
-          description: 'Opening balances',
-          reference_number: 'OB-00001',
-          source_type: 'Manual',
-          status: 'Posted',
-          currency: baseCurrency,
-          exchange_rate: 1,
-          posted_by: userId,
-          posted_at: new Date().toISOString(),
-          created_by: userId
-        })
-        .select()
-        .single();
-      if (entryErr) throw entryErr;
-
-      if (lines.length) {
-        const { error: lineErr } = await sb
-          .from('journal_entry_lines')
-          .insert(lines.map((l) => ({ ...l, entry_id: entry.id, tenant_id: tenantId })));
-        if (lineErr) throw lineErr;
-      }
-    }
-
-    // 6. Invitations — only if any were queued
-    if (State.form.invites.length) {
-      const inviteRows = State.form.invites.map((inv) => ({
-        tenant_id: tenantId,
-        email: inv.email,
-        role: inv.role,
-        invited_by: userId,
-        status: 'Pending'
-      }));
-      const { error: invErr } = await sb.from('invitations').insert(inviteRows);
-      if (invErr) {
-        console.warn('Invitation queue failed:', invErr);
-        toast('Workspace created — invitations could not be sent.', 'error', 5000);
-      }
-    }
-
-    // 7. Celebrate and redirect
+    // 6. Celebrate and redirect
     celebrate();
-    toast('Workspace created. Welcome to Apex.', 'ok', 3200);
+    toast(
+      data.existing
+        ? 'Workspace found. Taking you there…'
+        : 'Workspace created. Welcome to Apex.',
+      'ok', 3200
+    );
     setTimeout(() => {
       window.location.href = 'dashboard.html?welcome=1';
     }, 1500);
@@ -1653,22 +1533,29 @@ async function finish() {
   } catch (err) {
     console.error('Onboarding failed:', err);
     next.disabled = false;
-    const isLast = State.step === STEPS.length - 1;
-    next.textContent = isLast
-      ? (State.form.invites.length ? 'Create workspace' : 'Skip & create workspace')
-      : 'Continue';
+    next.textContent = State.form.invites.length
+      ? 'Create workspace'
+      : 'Skip & create workspace';
 
-    let friendly = err.message || 'unknown error';
-    if (friendly.includes('Session expired') || friendly.includes('Not authenticated')) {
+    let friendly = (err && err.message) || 'Unknown error';
+
+    // Translate RPC errors into clearer UI text
+    if (friendly.includes('Not authenticated') ||
+        friendly.includes('Session expired') ||
+        friendly.includes('Session invalid')) {
       friendly = 'Your session expired. Redirecting to sign in…';
       setTimeout(() => { window.location.href = 'index.html'; }, 2200);
+    } else if (friendly.includes('already have a workspace') ||
+               friendly.includes('duplicate key')) {
+      friendly = 'You already have a workspace. Taking you there…';
+      setTimeout(() => { window.location.href = 'dashboard.html'; }, 1800);
     }
 
     stepAlert(
       'We could not finish setting up: ' + friendly +
       '. Nothing was lost — try again.'
     );
-    toast('Setup failed. Please review and retry.', 'error', 5000);
+    toast('Setup failed.', 'error', 5000);
   }
 }
 
