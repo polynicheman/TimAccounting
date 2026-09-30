@@ -1347,11 +1347,29 @@ footer { border-top: 1px solid var(--border-soft); padding: 60px 0 34px; margin-
 
 /* ----------------------------------------------------------------
    1. CONFIG
+   ----------------------------------------------------------------
+   IMPORTANT — EMAIL CONFIRMATION MUST BE OFF IN SUPABASE
+   ----------------------------------------------------------------
+   The signup flow below assumes the user gets a session immediately
+   after signUp(). For that to work, go to:
+
+     Supabase Dashboard
+       → Authentication
+         → Providers
+           → Email
+             → "Confirm email" = OFF
+
+   With it OFF, signUp() returns an active session and the user
+   lands directly on onboarding.html.
+   With it ON, Supabase sends a confirmation email, no session is
+   returned, and we fall back to an immediate sign-in attempt —
+   which still fails if the email isn't confirmed. The code below
+   handles both cases with clear messaging.
    ---------------------------------------------------------------- */
 const APEX_CONFIG = {
   supabaseUrl:     'https://dvyobkzxejifxdbebdvr.supabase.co',
   supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2eW9ia3p4ZWppZnhkYmViZHZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzNDA2NDYsImV4cCI6MjEwNTkxNjY0Nn0.OQfwArh-LnhosEV_tA5udXdN0qor6RfaCGn5RKWAUg0',
-  version:         '1.0.0'
+  version:         '1.0.1'
 };
 
 const IS_CONFIGURED =
@@ -2010,6 +2028,9 @@ $('#authForm').addEventListener('submit', async (e) => {
     }
 
     if (authMode === 'signup') {
+      // ── CREATE ACCOUNT ─────────────────────────────────────────
+      // 1. signUp — with "Confirm email" OFF in Supabase, this
+      //    returns a live session and we go straight to onboarding.
       const { data, error } = await sb.auth.signUp({
         email,
         password,
@@ -2017,17 +2038,46 @@ $('#authForm').addEventListener('submit', async (e) => {
       });
       if (error) throw error;
 
+      // 2a. We got a session — email confirmation is disabled. Straight in.
       if (data.session) {
-        window.location.href = 'onboarding.html';
-      } else {
-        authAlert('Account created. Check your inbox to confirm your email, then sign in.', 'ok');
-        setAuthMode('signin');
+        toast('Account created. Setting up your workspace…', 'ok', 1600);
+        setTimeout(() => { window.location.href = 'onboarding.html'; }, 500);
+        return;
       }
-    } else {
-      const { error } = await sb.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      window.location.href = 'dashboard.html';
+
+      // 2b. No session returned — email confirmation is still ON
+      //     at the Supabase project level. Try an immediate sign-in
+      //     with the same credentials.
+      const { data: signInData, error: signInErr } = await sb.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (!signInErr && signInData && signInData.session) {
+        // Supabase allowed the sign-in despite confirmation being on.
+        // This happens in some configurations. Straight to onboarding.
+        toast('Account created. Setting up your workspace…', 'ok', 1600);
+        setTimeout(() => { window.location.href = 'onboarding.html'; }, 500);
+        return;
+      }
+
+      // 2c. Sign-in failed — email confirmation really is enforced.
+      //     Give the user a clear, actionable message.
+      authAlert(
+        'Your Supabase project has email confirmation enabled. ' +
+        'To skip email verification, go to Authentication → Providers → Email ' +
+        'in your Supabase dashboard and turn off "Confirm email", then try again.',
+        'error'
+      );
+      setAuthMode('signin');
+      return;
     }
+
+    // ── SIGN IN ────────────────────────────────────────────────────
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    window.location.href = 'dashboard.html';
+
   } catch (err) {
     authAlert(translateAuthError(err));
   } finally {
